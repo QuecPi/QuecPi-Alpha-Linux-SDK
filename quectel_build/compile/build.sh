@@ -132,6 +132,17 @@ function builddtb() {
 }
 
 
+function setopenkernel() {
+    cp $TOPDIR/quectel_build/config/bb/non-ostree/linux-qcom-uki.bb  $TOPDIR/layers/meta-qcom-hwe/recipes-kernel/images/linux-qcom-uki.bb
+    cp $TOPDIR/quectel_build/config/bb/non-ostree/qcom-base.inc $TOPDIR/layers/meta-qcom-distro/conf/distro/include/qcom-base.inc
+}
+
+function setostreekernel() {
+    cp $TOPDIR/quectel_build/config/bb/ostree/linux-qcom-uki.bb  $TOPDIR/layers/meta-qcom-hwe/recipes-kernel/images/linux-qcom-uki.bb
+    cp $TOPDIR/quectel_build/config/bb/ostree/qcom-base.inc $TOPDIR/layers/meta-qcom-distro/conf/distro/include/qcom-base.inc
+}
+
+
 export MACHINE=qcm6490-idp
 export DISTRO=qcom-wayland
 export FWZIP_PATH="${PWD}/quectel_build/prebuilt_bpfw"
