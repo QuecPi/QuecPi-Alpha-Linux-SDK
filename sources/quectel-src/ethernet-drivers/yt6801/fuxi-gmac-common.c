@@ -320,6 +320,8 @@ static void fxgmac_init_interrupt_scheme(struct fxgmac_pdata *pdata)
 	 * otherwise, just roll back to legacy
 	 */
 	vectors = num_online_cpus();
+//disable MSI-X	
+#if 0	
 	DPRINTK("num of cpu=%d\n", vectors);
 	if (vectors >= FXGMAC_MAX_DMA_CHANNELS) {
 		/* 0-3 for rx, 4 for tx, 5 for phy */
@@ -375,7 +377,7 @@ static void fxgmac_init_interrupt_scheme(struct fxgmac_pdata *pdata)
 			}
 		}
 	}
-
+#endif
 enable_msi_interrupt:
 	rc = pci_enable_msi(pdata->pdev);
 	if (rc < 0) {
