@@ -933,6 +933,7 @@ static void lt9611uxc_video_setup(struct lt9611uxc *lt9611uxc,
 	regmap_write(lt9611uxc->regmap, 0xd01b, (u8)(hfront_porch % 256));
 }
 
+#if 0
 static void lt9611uxc_bridge_enable(struct drm_bridge *bridge)
 {
 	struct lt9611uxc *lt9611uxc;
@@ -986,6 +987,18 @@ static void lt9611uxc_bridge_disable(struct drm_bridge *bridge)
 		hdmi_audio_deregister_ext_disp(lt9611uxc);
 	}
 }
+#else
+static void lt9611uxc_bridge_enable(struct drm_bridge *bridge)
+{
+	pr_debug("bridge enable\n");
+}
+
+static void lt9611uxc_bridge_disable(struct drm_bridge *bridge)
+{
+	pr_debug("bridge disable\n");
+}
+#endif
+
 
 static void lt9611uxc_bridge_mode_set(struct drm_bridge *bridge,
 				      const struct drm_display_mode *mode,

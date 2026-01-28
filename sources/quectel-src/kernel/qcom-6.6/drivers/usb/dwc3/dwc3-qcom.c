@@ -20,6 +20,7 @@
 #include <linux/usb/of.h>
 #include <linux/reset.h>
 #include <linux/iopoll.h>
+#include "../misc/qcom_eud.h"
 #include <linux/usb/hcd.h>
 #include <linux/usb.h>
 #include "core.h"
@@ -72,6 +73,10 @@ struct dwc3_qcom {
 	int			num_clocks;
 	struct reset_control	*resets;
 
+	/* VBUS regulator for host mode */
+	struct regulator	*vbus_reg;
+	bool			is_vbus_enabled;
+
 	int			hs_phy_irq;
 	int			dp_hs_phy_irq;
 	int			dm_hs_phy_irq;
@@ -91,7 +96,6 @@ struct dwc3_qcom {
 	struct icc_path		*icc_path_ddr;
 	struct icc_path		*icc_path_apps;
 
-	bool			enable_rt;
 	enum usb_role		current_role;
 	struct notifier_block	xhci_nb;
 };
@@ -447,6 +451,20 @@ static void dwc3_qcom_enable_interrupts(struct dwc3_qcom *qcom)
 	dwc3_qcom_enable_wakeup_irq(qcom->ss_phy_irq, 0);
 }
 
+static void dwc3_qcom_vbus_regulator_enable(struct dwc3_qcom *qcom, bool on)
+{
+	if (!qcom->vbus_reg)
+		return;
+
+	if (!qcom->is_vbus_enabled && on) {
+		regulator_enable(qcom->vbus_reg);
+		qcom->is_vbus_enabled = true;
+	} else if (qcom->is_vbus_enabled && !on) {
+		regulator_disable(qcom->vbus_reg);
+		qcom->is_vbus_enabled = false;
+	}
+}
+
 static int dwc3_qcom_suspend(struct dwc3_qcom *qcom, bool wakeup)
 {
 	u32 val;
@@ -751,7 +769,24 @@ static int dwc3_xhci_event_notifier(struct notifier_block *nb,
 static int dwc3_qcom_handle_cable_disconnect(void *data)
 {
 	struct dwc3_qcom *qcom = (struct dwc3_qcom *)data;
+	struct dwc3 *dwc = &qcom->dwc;
+	struct usb_role_switch *sw;
 	int ret = 0;
+
+	/*
+	 * HW sequence mandates a Vbus toggle to be performed during eud
+	 * enable/disable when in HS mode. If disconnect is issued in eud
+	 * Vbus OFF context process it only when in HS mode. USB enumeration
+	 * should remain undisturbed in other speeds.
+	 */
+	sw = usb_role_switch_get(dwc->dev);
+	if (IS_REACHABLE(CONFIG_USB_QCOM_EUD)) {
+		if (qcom_eud_vbus_control(sw) && dwc->speed != DWC3_DSTS_HIGHSPEED) {
+			usb_role_switch_put(sw);
+			return 0;
+		}
+	}
+	usb_role_switch_put(sw);
 
 	/*
 	 * If we are in device mode and get a cable disconnect,
@@ -765,6 +800,7 @@ static int dwc3_qcom_handle_cable_disconnect(void *data)
 		dwc3_qcom_vbus_override_enable(qcom, false);
 		pm_runtime_put_autosuspend(qcom->dev);
 	} else if (qcom->current_role == USB_ROLE_HOST) {
+		dwc3_qcom_vbus_regulator_enable(qcom, false);
 		usb_unregister_notify(&qcom->xhci_nb);
 	}
 
@@ -794,6 +830,7 @@ static void dwc3_qcom_handle_set_mode(void *data, u32 desired_dr_role)
 		qcom->xhci_nb.notifier_call = dwc3_xhci_event_notifier;
 		usb_register_notify(&qcom->xhci_nb);
 		qcom->current_role = USB_ROLE_HOST;
+		dwc3_qcom_vbus_regulator_enable(qcom, true);
 	}
 
 	pm_runtime_mark_last_busy(qcom->dev);
@@ -845,10 +882,17 @@ static int dwc3_qcom_probe_core(struct platform_device *pdev, struct dwc3_qcom *
 	struct dwc3_glue_data qcom_glue_data = {
 		.glue_data	= qcom,
 		.ops		= &dwc3_qcom_glue_hooks,
+		.ignore_resets  = true,
 	};
 
-	ret = dwc3_probe(&qcom->dwc,
-			 qcom->enable_rt ? &qcom_glue_data : NULL);
+	/*
+	 * Always pass glue data to dwc3_probe as the runtime PM support is now
+	 * required for all platforms using the flattened implementation of this
+	 * driver. The conditional flag enable_rt was removed as it's no longer
+	 * needed.
+	 */
+
+	ret = dwc3_probe(&qcom->dwc, &qcom_glue_data);
 	if (ret)
 		return ret;
 
@@ -955,6 +999,24 @@ static int dwc3_qcom_acpi_merge_urs_resources(struct platform_device *pdev)
 	return ret;
 }
 
+static void dwc3_qcom_vbus_regulator_get(struct dwc3_qcom *qcom)
+{
+	/*
+	 * The vbus_reg pointer could have multiple values
+	 * NULL: regulator_get() hasn't been called, or was previously deferred
+	 * IS_ERR: regulator could not be obtained, so skip using it
+	 * Valid pointer otherwise
+	 */
+	qcom->vbus_reg = devm_regulator_get_optional(qcom->dev,
+						"vbus_dwc3");
+	if (IS_ERR(qcom->vbus_reg)) {
+		dev_err(qcom->dev, "Unable to get vbus regulator err: %ld\n",
+							PTR_ERR(qcom->vbus_reg));
+		qcom->vbus_reg = NULL;
+		return;
+	}
+}
+
 static int dwc3_qcom_probe(struct platform_device *pdev)
 {
 	struct device_node	*np = pdev->dev.of_node;
@@ -1001,32 +1063,30 @@ static int dwc3_qcom_probe(struct platform_device *pdev)
 		}
 	}
 
-	if (legacy_binding) {
-		qcom->resets = devm_reset_control_array_get_optional_exclusive(dev);
-		if (IS_ERR(qcom->resets)) {
-			return dev_err_probe(&pdev->dev, PTR_ERR(qcom->resets),
-					     "failed to get resets\n");
-		}
+	qcom->resets = devm_reset_control_array_get_optional_exclusive(dev);
+	if (IS_ERR(qcom->resets)) {
+		return dev_err_probe(&pdev->dev, PTR_ERR(qcom->resets),
+					"failed to get resets\n");
+	}
 
-		ret = reset_control_assert(qcom->resets);
-		if (ret) {
-			dev_err(&pdev->dev, "failed to assert resets, err=%d\n", ret);
-			return ret;
-		}
+	ret = reset_control_assert(qcom->resets);
+	if (ret) {
+		dev_err(&pdev->dev, "failed to assert resets, err=%d\n", ret);
+		return ret;
+	}
 
-		usleep_range(10, 1000);
+	usleep_range(10, 1000);
 
-		ret = reset_control_deassert(qcom->resets);
-		if (ret) {
-			dev_err(&pdev->dev, "failed to deassert resets, err=%d\n", ret);
-			goto reset_assert;
-		}
+	ret = reset_control_deassert(qcom->resets);
+	if (ret) {
+		dev_err(&pdev->dev, "failed to deassert resets, err=%d\n", ret);
+		return ret;
 	}
 
 	ret = dwc3_qcom_clk_init(qcom, of_clk_get_parent_count(np));
 	if (ret) {
 		dev_err_probe(dev, ret, "failed to get clocks\n");
-		goto reset_assert;
+		return ret;
 	}
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
@@ -1062,8 +1122,6 @@ static int dwc3_qcom_probe(struct platform_device *pdev)
 	if (ignore_pipe_clk)
 		dwc3_qcom_select_utmi_clk(qcom);
 
-	qcom->enable_rt = device_property_read_bool(dev,
-				"qcom,enable-rt");
 	if (!legacy_binding) {
 		/*
 		 * If we are enabling runtime, then we are using flattened
@@ -1079,6 +1137,8 @@ static int dwc3_qcom_probe(struct platform_device *pdev)
 			qcom->current_role = USB_ROLE_NONE;
 	}
 
+	dwc3_qcom_vbus_regulator_get(qcom);
+
 	if (legacy_binding)
 		ret = dwc3_qcom_of_register_core(pdev);
 	else
@@ -1086,7 +1146,7 @@ static int dwc3_qcom_probe(struct platform_device *pdev)
 
 	if (ret) {
 		dev_err(dev, "failed to register DWC3 Core, err=%d\n", ret);
-		goto depopulate;
+		goto clk_disable;
 	}
 
 	ret = dwc3_qcom_interconnect_init(qcom);
@@ -1104,6 +1164,11 @@ static int dwc3_qcom_probe(struct platform_device *pdev)
 		ret = dwc3_qcom_register_extcon(qcom);
 		if (ret)
 			goto interconnect_exit;
+	}
+
+	if (qcom->mode == USB_DR_MODE_HOST) {
+		dwc3_qcom_vbus_regulator_enable(qcom, true);
+		qcom->is_vbus_enabled = true;
 	}
 
 	wakeup_source = of_property_read_bool(dev->of_node, "wakeup-source");
@@ -1133,8 +1198,6 @@ clk_disable:
 		clk_disable_unprepare(qcom->clks[i]);
 		clk_put(qcom->clks[i]);
 	}
-reset_assert:
-	reset_control_assert(qcom->resets);
 
 	return ret;
 }
@@ -1167,7 +1230,6 @@ static void dwc3_qcom_remove(struct platform_device *pdev)
 	qcom->num_clocks = 0;
 
 	dwc3_qcom_interconnect_exit(qcom);
-	reset_control_assert(qcom->resets);
 
 	if (qcom->dwc_dev) {
 		pm_runtime_allow(dev);
@@ -1200,7 +1262,6 @@ static void dwc3_qcom_shutdown(struct platform_device *pdev)
 	qcom->num_clocks = 0;
 
 	dwc3_qcom_interconnect_exit(qcom);
-	reset_control_assert(qcom->resets);
 
 	pm_runtime_allow(qcom->dev);
 	pm_runtime_disable(qcom->dev);
