@@ -4,11 +4,19 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 
+#include <linux/fs.h>
+#include <linux/uaccess.h>
+#include <linux/ctype.h>
+#include <linux/etherdevice.h>
+#include <linux/random.h>
+
 #include "fuxi-os.h"
 #include "fuxi-gmac.h"
 #include "fuxi-gmac-reg.h"
 
 MODULE_LICENSE("Dual BSD/GPL");
+
+#define FXGMAC_MAC_FILE "/var/persist/mac_addr"
 
 static int debug = 16;
 module_param(debug, int, 0644);
@@ -16,19 +24,96 @@ MODULE_PARM_DESC(debug, "FUXI ethernet debug level (0=none,...,16=all)");
 
 static unsigned char dev_addr[6] = { 0, 0x55, 0x7b, 0xb5, 0x7d, 0xf7 };
 
+static int fxgmac_parse_mac_from_str(const char *buf, u8 *mac)
+{
+	int i = 0;
+	const char *p = buf;
+
+	while (*p && i < ETH_ALEN) {
+		int hi, lo;
+
+		while (*p && (isspace(*p) || *p == ':' || *p == '-' || *p == ',')) {
+			p++;
+		}
+		if (!*p)
+			break;
+
+		if (!isxdigit(p[0]) || !isxdigit(p[1]))
+			return -EINVAL;
+
+		hi = hex_to_bin(p[0]);
+		lo = hex_to_bin(p[1]);
+		if (hi < 0 || lo < 0)
+			return -EINVAL;
+
+		mac[i++] = (hi << 4) | lo;
+		p += 2;
+	}
+
+	if (i != ETH_ALEN)
+		return -EINVAL;
+
+	if (!is_valid_ether_addr(mac))
+		return -EINVAL;
+
+	return 0;
+}
+
+static int fxgmac_read_mac_from_file(const char *path, u8 *mac)
+{
+	struct file *filp;
+	char buf[64];
+	loff_t pos = 0;
+	ssize_t n;
+	int ret;
+
+	memset(buf, 0, sizeof(buf));
+
+	filp = filp_open(path, O_RDONLY, 0);
+	if (IS_ERR(filp))
+		return PTR_ERR(filp);
+
+	n = kernel_read(filp, buf, sizeof(buf) - 1, &pos);
+	filp_close(filp, NULL);
+
+	if (n <= 0)
+		return -EINVAL;
+
+	while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) {
+		buf[n - 1] = '\0';
+		n--;
+	}
+
+	ret = fxgmac_parse_mac_from_str(buf, mac);
+	return ret;
+}
+
 static void fxgmac_read_mac_addr(struct fxgmac_pdata *pdata)
 {
 	struct net_device *netdev = pdata->netdev;
 	struct fxgmac_hw_ops *hw_ops = &pdata->hw_ops;
 
+	int ret;
+
 	DPRINTK("read mac from eFuse\n");
 
 	/* if efuse have mac addr, use it.if not, use static mac address. */
 	hw_ops->read_mac_subsys_from_efuse(pdata, pdata->mac_addr, NULL, NULL);
-	if (ETH_IS_ZEROADDRESS(pdata->mac_addr)) {
-		/* Currently it uses a static mac address for test */
-		memcpy(pdata->mac_addr, dev_addr, netdev->addr_len);
+	if (is_valid_ether_addr(pdata->mac_addr))
+		return;
+	ret = fxgmac_read_mac_from_file(FXGMAC_MAC_FILE, pdata->mac_addr);
+	if (!ret) {
+		netdev_info(netdev, "MAC from file %s: %pM\n",
+			    FXGMAC_MAC_FILE, pdata->mac_addr);
+		return;
 	}
+	memcpy(pdata->mac_addr, dev_addr, ETH_ALEN);
+
+	get_random_bytes(&pdata->mac_addr[2], 4);
+	
+	pdata->mac_addr[0] &= 0xFE;  /* clear multicast bit */
+	pdata->mac_addr[0] |= 0x02;  /* set local-admin bit */
+	netdev_warn(netdev, "MAC not found, use ramdom: %pM\n", pdata->mac_addr);
 }
 
 static void fxgmac_default_config(struct fxgmac_pdata *pdata)

@@ -4,6 +4,8 @@ TARGET_FILE="/lib/firmware/wlan/wlan_mac.bin"
 SOURCE_FILE="/var/persist/wlan_mac.bin"
 OUTPUT_FILE="/etc/bluetooth/.bt_nv.bin"
 NVDATA_FILE="/var/persist/NV_data"
+IFACE=eth0
+MAC_FILE=/var/persist/mac_addr
 
 DEFAULT_MAC="005533225511"
 
@@ -93,3 +95,18 @@ insmod /lib/modules/6.6.52-qli-1.3-ver.1.1/updates/wlan.ko
 sleep 1
 ifconfig wlan0 up
 echo "reload wlan driver success"
+
+if [ ! -f "$MAC_FILE" ]; then
+    CUR_MAC=$(cat /sys/class/net/$IFACE/address 2>/dev/null)
+
+    if [ -n "$CUR_MAC" ]; then
+        mkdir -p $(dirname "$MAC_FILE")
+        echo "$CUR_MAC" > "$MAC_FILE"
+        sync
+        echo "Saved $IFACE MAC to $MAC_FILE"
+    else
+        echo "Cannot read MAC from $IFACE"
+    fi
+fi
+rmmod yt6801
+modprobe yt6801
