@@ -23,6 +23,8 @@ SRC_URI = "file://rotation \
            file://share/dot.bashrc \
            file://share/dot.profile \
            file://licenses/GPL-2 \
+           file://LT9611UXC_DSI_PortA_HDCP_Disable_V5.0.21.bin \
+           file://LT9611UXD.bin \
            "
 S = "${WORKDIR}"
 
@@ -129,6 +131,9 @@ do_install () {
 	install -m 0755 ${WORKDIR}/share/dot.bashrc ${D}${sysconfdir}/skel/.bashrc
 	install -m 0644 ${WORKDIR}/host.conf ${D}${sysconfdir}/host.conf
 	install -m 0644 ${WORKDIR}/motd ${D}${sysconfdir}/motd
+	install -d ${D}/${nonarch_base_libdir}/firmware
+	install -m 0755  ${WORKDIR}/LT9611UXC_DSI_PortA_HDCP_Disable_V5.0.21.bin ${D}/${nonarch_base_libdir}/firmware/lt9611uxc_fw.bin
+	install -m 0755  ${WORKDIR}/LT9611UXD.bin ${D}/${nonarch_base_libdir}/firmware/LT9611UXD.bin
 
 	ln -sf /proc/mounts ${D}${sysconfdir}/mtab
 

@@ -41,6 +41,9 @@
 #define MAX_NUMBER_ADB 5
 #define MAX_AUDIO_DATA_BLOCK_SIZE 30
 
+extern int lt9611_owner;
+extern struct mutex lt9611_lock;
+
 struct lt9611uxc_mode {
 	u16 hdisplay;
 	u16 htotal;
@@ -1641,6 +1644,19 @@ static int lt9611uxc_probe(struct i2c_client *client)
 	struct device *dev = &client->dev;
 	int ret;
 	bool fw_updated = false;
+
+	if(lt9611_owner == 1)
+	{
+		dev_err(dev, "lt9611uxd has probe fail, Now probe LT9611UXC\n");
+	}else if(lt9611_owner == 0)
+	{
+		dev_err(dev, "lt9611uxd is probe success LT9611UXC  will not probe...\n");
+		return -ENODEV;
+	}else
+	{
+		dev_err(dev, "lt9611uxd is not probed waiting \n");
+		return -EPROBE_DEFER;
+	}
 
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
 		dev_err(dev, "device doesn't support I2C\n");

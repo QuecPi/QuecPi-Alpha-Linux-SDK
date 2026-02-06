@@ -11,6 +11,7 @@
 #include <linux/version.h>
 #include <linux/ktime.h>
 #include <drm/bridge/waveshare-bl.h>
+#include <linux/gpio/consumer.h>
 
 #include "msm_drv.h"
 #include "sde_connector.h"
@@ -39,6 +40,13 @@
 #define MAX_TE_SOURCE_ID  2
 
 #define SEC_PANEL_NAME_MAX_LEN  256
+
+int lt9611_owner = -1; 
+struct mutex lt9611_lock;
+
+EXPORT_SYMBOL_GPL(lt9611_owner);
+EXPORT_SYMBOL_GPL(lt9611_lock);
+
 
 u8 dbgfs_tx_cmd_buf[SZ_4K];
 static char dsi_display_primary[MAX_CMDLINE_PARAM_LEN];

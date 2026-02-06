@@ -98,9 +98,6 @@
 		vcc-supply = <&lt9611_3v3_vreg>;
 		vdd-supply = <&lt9611_1v2_vreg>;
 
-		pinctrl-names = "default";
-		pinctrl-0 = <&lt9611_irq_pin &lt9611_rst_pin>;
-
 		ports {
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -108,8 +105,8 @@
 			port@0 {
 				reg = <0>;
 
-				lt9611_a: endpoint {
-					remote-endpoint = <&ext_dsi_out>;
+				lt9611_uxc_a: endpoint {
+					remote-endpoint = <&ext_dsi_uxc_out>;
 				};
 			};
 			port@2 {
@@ -121,6 +118,43 @@
 			};
 		};
 	};
+
+	lt9611uxd: lt,lt9611uxd@41 {
+		compatible = "lontium,lt9611uxd";
+		reg = <0x41>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&lt9611_rst_pin &lt9611_irq_pin>;
+
+		interrupts-extended = <&tlmm 44 IRQ_TYPE_EDGE_FALLING>;
+		reset-gpios = <&tlmm 158 0>;
+		power-gpios = <&tlmm 7 0>; //LT9611_5V_EN GPIO_ACTIVE_HIGH
+
+		vcc-supply = <&lt9611_3v3_vreg>;
+		vdd-supply = <&lt9611_1v2_vreg>;
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+
+				lt9611_uxd_a: endpoint {
+					remote-endpoint = <&ext_dsi_uxd_out>;
+				};
+			};
+			port@2 {
+				reg = <2>;
+
+				lt9611_uxd_out: endpoint {
+					remote-endpoint = <&hdmi_con>;
+				};
+			};
+		};
+	};
+
+
 };
 
 &sde_dsi {
@@ -139,8 +173,15 @@
 
 		port@0 {
 			reg = <0>;
-			ext_dsi_out: endpoint {
-				remote-endpoint = <&lt9611_a>;
+			ext_dsi_uxd_out: endpoint {
+				remote-endpoint = <&lt9611_uxd_a>;
+			};
+		};
+
+		port@1 {
+			reg = <0>;
+			ext_dsi_uxc_out: endpoint {
+				remote-endpoint = <&lt9611_uxc_a>;
 			};
 		};
 	};
